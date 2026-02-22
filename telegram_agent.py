@@ -3,6 +3,7 @@ import os
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional
+import requests
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
@@ -12,6 +13,7 @@ from telegram.ext import (ApplicationBuilder, CallbackQueryHandler,
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ALLOWED_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
 WORKSPACE_DIR = Path(os.getenv("TELEGRAM_WORKSPACE", os.getcwd())).resolve()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 
 MAX_OUTPUT_CHARS = 3500
 COMMAND_TIMEOUT = 300
@@ -20,6 +22,8 @@ ALLOWED_COMMANDS = {
     "status": ["git", "status", "-sb"],
     "tests": ["python", "-m", "pytest", "-q"],
     "pip_list": ["python", "-m", "pip", "list"],
+    "pwd": ["powershell", "-Command", "Get-Location"],
+    "workspace": ["powershell", "-Command", f"echo {WORKSPACE_DIR}"],
 }
 
 
@@ -71,11 +75,48 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Kullanilabilir komutlar:\n"
         f"- /run <komut_anahtari> (ornek: /run status)\n"
+        "- /ask <soru> - OpenRouter LLM ile sohbet\n"
         "- edit <dosya_yolu> + icerik (format asagida)\n\n"
         "Yeni icerik formati:\n"
         "edit <dosya_yolu>\n<<<\n(yeni icerik)\n>>>\n\n"
         f"Komut anahtarlari: {commands}"
     )
+
+
+async def ask_llm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        return
+    
+    if not OPENROUTER_API_KEY:
+        await update.message.reply_text("OPENROUTER_API_KEY tanimli degil.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text("/ask <soru> formatinda yaz.")
+        return
+    
+    question = " ".join(context.args)
+    await update.message.reply_text("Dusunuyorum...")
+    
+    try:
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "openai/gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": question}]
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        data = response.json()
+        answer = data["choices"][0]["message"]["content"]
+        await update.message.reply_text(format_output(answer))
+    except Exception as exc:
+        await update.message.reply_text(f"Hata: {exc}")
 
 
 async def run_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,6 +264,7 @@ def main() -> None:
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("ask", ask_llm))
     app.add_handler(CommandHandler("run", run_command))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

@@ -153,7 +153,7 @@ def parse_edit_message(text: str) -> Optional[tuple]:
         return None
     header, rest = text.split("\n", 1)
     _, path_part = header.split(" ", 1)
-    content = rest.split("\n<<<\n", 1)[1]
+    content = text.split("\n<<<\n", 1)[1]
     new_content = content.split("\n>>>", 1)[0]
     return path_part.strip(), new_content
 
